@@ -1,22 +1,19 @@
+// Import the React library
 import React from 'react';
 
+// Functional component to display the history of messages
 const MessageHistory = ({ history }) => (
-  <div>
-    <h3>Message History:</h3>
+  <div className="message-history-container">
+    {/* Title for the message history section */}
+    <h3 className="message-history-title">Message History:</h3>
+    {/* Map through the message history array and render each message */}
     {history.map((msg, index) => (
-      <div
-        key={index}
-        style={{
-          marginBottom: "5px",
-          padding: "8px",
-          backgroundColor: "#f5f5f5",
-          borderRadius: "4px"
-        }}
-      >
+      <div key={index} className="message-history-item">
         {msg}
       </div>
     ))}
   </div>
 );
 
+// Exporting the component wrapped in React.memo for performance optimization
 export default React.memo(MessageHistory);

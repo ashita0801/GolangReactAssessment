@@ -1,19 +1,16 @@
+// Import the React library
 import React from 'react';
 
+// Functional component to display a list of messages
 const MessageList = ({ messages }) => (
-  <div>
-    <h3>Messages:</h3>
+  <div className="message-list-container">
+    {/* Title for the messages section */}
+    <h3 className="message-list-title">Messages:</h3>
+    {/* Map through the messages array to render each message */}
     {messages.map((msg, index) => (
       <div
         key={index}
-        style={{
-          marginBottom: "5px",
-          padding: "8px",
-          backgroundColor: msg.type === "sent" ? "#e3f2fd" : "#f1f8e9",
-          borderRadius: "4px",
-          maxWidth: "80%",
-          marginLeft: msg.type === "sent" ? "auto" : "0",
-        }}
+        className={`message-item ${msg.type === "sent" ? "message-sent" : "message-received"}`}
       >
         {msg.text}
       </div>
@@ -21,4 +18,5 @@ const MessageList = ({ messages }) => (
   </div>
 );
 
+// Exporting the component wrapped in React.memo for performance optimization
 export default React.memo(MessageList);

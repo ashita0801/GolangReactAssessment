@@ -1,145 +1,80 @@
 package main
 
 import (
-    "context"
-    "log"
-    "net/http"
-    "os"
-    "os/signal"
-    "sync"
-    "time"
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"time"
 
-    "github.com/gorilla/websocket"
+	"github.com/gorilla/websocket"
+	"websocket-server/websocket" // Custom package for WebSocket connection management
 )
 
-const (
-    // MaxHistorySize is the maximum number of messages to keep in history
-    MaxHistorySize = 5
-    
-    // WriteTimeout is the maximum time to wait for a write operation
-    WriteTimeout = 10 * time.Second
-)
-
-// MessageHistory stores the last N messages
-type MessageHistory struct {
-    messages []string
-    mu       sync.Mutex
-}
-
-// AddMessage adds a new message to the history, maintaining max size
-func (mh *MessageHistory) AddMessage(msg string) {
-    mh.mu.Lock()
-    defer mh.mu.Unlock()
-    if len(mh.messages) >= MaxHistorySize {
-        mh.messages = mh.messages[1:]
-    }
-    mh.messages = append(mh.messages, msg)
-}
-
-// GetHistory returns a copy of the message history
-func (mh *MessageHistory) GetHistory() []string {
-    mh.mu.Lock()
-    defer mh.mu.Unlock()
-    return append([]string{}, mh.messages...)
-}
-
+// Upgrader is used to upgrade HTTP connections to WebSocket connections.
+// It specifies buffer sizes and allows all origins (for testing purposes).
 var upgrader = websocket.Upgrader{
-    CheckOrigin: func(r *http.Request) bool { return true }, // Allow all origins
-}
-
-// handleWebSocket manages a single WebSocket connection
-func handleWebSocket(conn *websocket.Conn, history *MessageHistory) {
-    defer conn.Close()
-
-    // Set read deadline for first message
-    conn.SetReadDeadline(time.Now().Add(WriteTimeout))
-
-    for {
-        messageType, msg, err := conn.ReadMessage()
-        if err != nil {
-            if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-                log.Printf("Unexpected WebSocket error: %v", err)
-            }
-            break
-        }
-
-        // Reset deadline for next message
-        conn.SetReadDeadline(time.Now().Add(WriteTimeout))
-
-        message := string(msg)
-        if messageType != websocket.TextMessage {
-            log.Printf("Unsupported message type: %d", messageType)
-            continue
-        }
-
-        // Handle different message types
-        switch message {
-        case "history":
-            if err := conn.WriteJSON(history.GetHistory()); err != nil {
-                log.Printf("Error sending history: %v", err)
-                return
-            }
-        default:
-            reversed := reverseString(message)
-            history.AddMessage(message)
-            
-            if err := conn.WriteMessage(websocket.TextMessage, []byte(reversed)); err != nil {
-                log.Printf("Error sending message: %v", err)
-                return
-            }
-        }
-    }
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow all origins for testing; adjust for production.
+	},
 }
 
 func main() {
-    history := &MessageHistory{}
+	// Create a new WebSocket connection manager.
+	manager := websocket.NewConnectionManager()
 
-    // Create server with timeouts
-    server := &http.Server{
-        Addr:              ":8080",
-        ReadTimeout:       15 * time.Second,
-        WriteTimeout:      15 * time.Second,
-        IdleTimeout:       60 * time.Second,
-        ReadHeaderTimeout: 5 * time.Second,
-    }
+	// Start the connection manager's routine to handle WebSocket connections.
+	go manager.Run()
 
-    // Handle WebSocket connections
-    http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-        conn, err := upgrader.Upgrade(w, r, nil)
-        if err != nil {
-            log.Printf("WebSocket upgrade error: %v", err)
-            return
-        }
-        go handleWebSocket(conn, history)
-    })
+	// Create an HTTP server with timeouts to enhance reliability and prevent hanging connections.
+	server := &http.Server{
+		Addr:              ":8080",           // Server listens on port 8080.
+		ReadTimeout:       15 * time.Second,  // Maximum duration for reading a request.
+		WriteTimeout:      15 * time.Second,  // Maximum duration for writing a response.
+		IdleTimeout:       60 * time.Second,  // Maximum time for idle connections.
+		ReadHeaderTimeout: 5 * time.Second,   // Timeout for reading HTTP headers.
+	}
 
-    // Handle graceful shutdown
-    stop := make(chan os.Signal, 1)
-    signal.Notify(stop, os.Interrupt)
+	// Define the WebSocket endpoint handler.
+	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		// Upgrade the incoming HTTP connection to a WebSocket connection.
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Printf("WebSocket upgrade error: %v", err) // Log the error if upgrade fails.
+			return
+		}
 
-    go func() {
-        log.Println("WebSocket server started on :8080")
-        if err := server.ListenAndServe(); err != http.ErrServerClosed {
-            log.Fatalf("Server error: %v", err)
-        }
-    }()
+		// Pass the WebSocket connection to the manager for handling.
+		go manager.HandleWebSocket(conn)
+	})
 
-    <-stop
-    log.Println("Shutting down server...")
+	// Create a channel to listen for OS interrupt signals for graceful shutdown.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt)
 
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
+	// Start the server in a separate goroutine to allow graceful shutdown.
+	go func() {
+		log.Println("WebSocket server started on :8080")
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			// Log if the server encounters a critical error.
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
 
-    if err := server.Shutdown(ctx); err != nil {
-        log.Fatalf("Server shutdown error: %v", err)
-    }
-    log.Println("Server gracefully stopped")
-}
+	// Wait for an interrupt signal (e.g., Ctrl+C) to initiate shutdown.
+	<-stop
+	log.Println("Shutting down server...")
 
-func reverseString(s string) string {
-    runes := []rune(s)
-    for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
-        runes[i], runes[j] = runes[j], runes[i]
-    }
-    return string(runes)
+	// Create a context with a 5-second timeout for server shutdown.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Attempt to gracefully shut down the server.
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalf("Server shutdown error: %v", err)
+	}
+	log.Println("Server gracefully stopped")
 }
